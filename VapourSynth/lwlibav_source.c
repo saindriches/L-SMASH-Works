@@ -243,19 +243,6 @@ static const VSFrame* VS_CC vs_filter_get_frame(
         bottom = (vohp->frame_order_list[n].bottom == vohp->frame_order_list[frame_number].bottom) ? vohp->frame_order_list[n - 1].bottom
                                                                                                    : vohp->frame_order_list[n].bottom;
     }
-    if (vohp->scaler.output_pixel_format == AV_PIX_FMT_XYZ12LE) {
-        const int pitch = vsapi->getStride(vs_frame, output_index) / 2;
-        uint16_t* as_frame_ptr = (uint16_t*)(vsapi->getWritePtr(vs_frame, output_index));
-        for (int y = 0; y < vsapi->getFrameHeight(vs_frame, output_index); ++y) {
-            for (int x = 0; x < pitch; x += 3) {
-                const uint16_t temp = as_frame_ptr[x];
-                as_frame_ptr[x] = as_frame_ptr[x + 2];
-                as_frame_ptr[x + 2] = temp;
-            }
-
-            as_frame_ptr += pitch;
-        }
-    }
     set_frame_properties(vi, av_frame, vdhp->format->streams[vdhp->stream_index], vs_frame, top, bottom, vsapi, n);
     return vs_frame;
 }
@@ -418,6 +405,7 @@ void VS_CC vs_lwlibavsource_create(const VSMap* in, VSMap* out, void* user_data,
         free_handler(&hp);
         return;
     }
+    vs_set_raw_xyz_output(vohp, format);
     AVFrame* av_frame = lwlibav_video_get_frame_buffer(vdhp);
     if (!av_frame->data[0] && hp->prefer_hw) {
         free_handler(&hp);

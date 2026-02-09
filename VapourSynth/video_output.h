@@ -42,6 +42,7 @@ typedef void func_make_frame(lw_video_scaler_handler_t* vshp, AVFrame* av_pictur
 typedef struct {
     int variable_info;
     int direct_rendering;
+    int raw_xyz;
     const component_reorder_t* component_reorder[2];
     VSPresetVideoFormat vs_output_pixel_format;
     VSFrame* background_frame[2];
@@ -59,6 +60,8 @@ VSFrame* make_frame(lw_video_output_handler_t* vohp, AVFrame* av_frame, int outp
 int vs_setup_video_rendering(lw_video_output_handler_t* lw_vohp, AVCodecContext* ctx, VSVideoInfo* vi, VSMap* out, int width, int height);
 
 vs_video_output_handler_t* vs_allocate_video_output_handler(lw_video_output_handler_t* vohp);
+
+void vs_set_raw_xyz_output(lw_video_output_handler_t* vohp, const char* format);
 
 void vs_set_frame_properties(AVFrame* av_frame, AVStream* stream, int64_t duration_num, int64_t duration_den, VSFrame* vs_frame, int top,
     int bottom, const VSAPI* vsapi, int n);

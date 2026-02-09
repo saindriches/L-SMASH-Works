@@ -181,6 +181,32 @@ static void make_frame_planar_alpha16(lw_video_scaler_handler_t* vshp, AVFrame* 
     }
 }
 
+static void make_frame_planar_xyz_passthrough(lw_video_scaler_handler_t* vshp, AVFrame* av_picture,
+    const component_reorder_t* component_reorder, VSFrame* vs_frame, VSFrameContext* frame_ctx, const VSAPI* vsapi)
+{
+    /* XYZ12LE -> planar RGB36 passthrough without colorimetry conversion.
+     * XYZ12LE stores 12-bit values left-shifted by 4 in 16-bit containers.
+     * pfRGB36 expects 12-bit values [0, 4095], so right-shift by 4. */
+    uint8_t* dst_r = vsapi->getWritePtr(vs_frame, 0);
+    uint8_t* dst_g = vsapi->getWritePtr(vs_frame, 1);
+    uint8_t* dst_b = vsapi->getWritePtr(vs_frame, 2);
+    ptrdiff_t dst_stride_r = vsapi->getStride(vs_frame, 0);
+    ptrdiff_t dst_stride_g = vsapi->getStride(vs_frame, 1);
+    ptrdiff_t dst_stride_b = vsapi->getStride(vs_frame, 2);
+    for (int y = 0; y < av_picture->height; y++) {
+        const uint16_t* src = (const uint16_t*)(av_picture->data[0] + y * av_picture->linesize[0]);
+        uint16_t* dr = (uint16_t*)(dst_r + y * dst_stride_r);
+        uint16_t* dg = (uint16_t*)(dst_g + y * dst_stride_g);
+        uint16_t* db = (uint16_t*)(dst_b + y * dst_stride_b);
+        for (int x = 0; x < av_picture->width; x++) {
+            dr[x] = src[0] >> 4; /* X -> R */
+            dg[x] = src[1] >> 4; /* Y -> G */
+            db[x] = src[2] >> 4; /* Z -> B */
+            src += 3;
+        }
+    }
+}
+
 VSPresetVideoFormat get_vs_output_pixel_format(const char* format_name)
 {
     if (!format_name)
@@ -194,7 +220,7 @@ VSPresetVideoFormat get_vs_output_pixel_format(const char* format_name)
         { "YUV420P12", pfYUV420P12 }, { "YUV422P12", pfYUV422P12 }, { "YUV444P12", pfYUV444P12 }, { "YUV420P14", pfYUV420P14 },
         { "YUV422P14", pfYUV422P14 }, { "YUV444P14", pfYUV444P14 }, { "YUV420P16", pfYUV420P16 }, { "YUV422P16", pfYUV422P16 },
         { "YUV444P16", pfYUV444P16 }, { "Y8", pfGray8 }, { "Y16", pfGray16 }, { "RGB24", pfRGB24 }, { "RGB27", pfRGB27 },
-        { "RGB30", pfRGB30 }, { "RGB48", pfRGB48 }, { NULL, pfNone } };
+        { "RGB30", pfRGB30 }, { "RGB36", pfRGB36 }, { "RGB48", pfRGB48 }, { "XYZ12LE", pfRGB36 }, { NULL, pfNone } };
     for (int i = 0; format_table[i].format_name; i++)
         if (strcasecmp(format_name, format_table[i].format_name) == 0)
             return format_table[i].vs_output_pixel_format;
@@ -214,7 +240,7 @@ static enum AVPixelFormat vs_to_av_output_pixel_format(VSPresetVideoFormat vs_ou
         { pfYUV420P14, AV_PIX_FMT_YUV420P14LE }, { pfYUV422P14, AV_PIX_FMT_YUV422P14LE }, { pfYUV444P14, AV_PIX_FMT_YUV444P14LE },
         { pfYUV420P16, AV_PIX_FMT_YUV420P16LE }, { pfYUV422P16, AV_PIX_FMT_YUV422P16LE }, { pfYUV444P16, AV_PIX_FMT_YUV444P16LE },
         { pfGray8, AV_PIX_FMT_GRAY8 }, { pfGray16, AV_PIX_FMT_GRAY16LE }, { pfRGB24, AV_PIX_FMT_GBRP }, { pfRGB27, AV_PIX_FMT_GBRP9LE },
-        { pfRGB30, AV_PIX_FMT_GBRP10LE }, { pfRGB48, AV_PIX_FMT_GBRP16LE }, { pfNone, AV_PIX_FMT_NONE } };
+        { pfRGB30, AV_PIX_FMT_GBRP10LE }, { pfRGB36, AV_PIX_FMT_GBRP12LE }, { pfRGB48, AV_PIX_FMT_GBRP16LE }, { pfNone, AV_PIX_FMT_NONE } };
     for (int i = 0; format_table[i].vs_output_pixel_format != pfNone; i++)
         if (vs_output_pixel_format == format_table[i].vs_output_pixel_format)
             return format_table[i].av_output_pixel_format;
@@ -246,8 +272,8 @@ static const component_reorder_t* get_component_reorder(enum AVPixelFormat av_ou
         { AV_PIX_FMT_GRAY8, { 0, -1, -1, -1 } }, { AV_PIX_FMT_GRAY16LE, { 0, -1, -1, -1 } },
         /* RGB */
         { AV_PIX_FMT_GBRP, { 1, 2, 0, -1 } }, { AV_PIX_FMT_GBRP9LE, { 1, 2, 0, -1 } }, { AV_PIX_FMT_GBRP10LE, { 1, 2, 0, -1 } },
-        { AV_PIX_FMT_GBRP16LE, { 1, 2, 0, -1 } }, { AV_PIX_FMT_GBRAP, { 1, 2, 0, 3 } }, { AV_PIX_FMT_GBRAP10LE, { 1, 2, 0, 3 } },
-        { AV_PIX_FMT_GBRAP16LE, { 1, 2, 0, 3 } }, { AV_PIX_FMT_RGB24, { 0, 1, 2, -1 } }, { AV_PIX_FMT_BGR24, { 2, 1, 0, -1 } },
+        { AV_PIX_FMT_GBRP12LE, { 1, 2, 0, -1 } }, { AV_PIX_FMT_GBRP16LE, { 1, 2, 0, -1 } }, { AV_PIX_FMT_GBRAP, { 1, 2, 0, 3 } },
+        { AV_PIX_FMT_GBRAP10LE, { 1, 2, 0, 3 } }, { AV_PIX_FMT_GBRAP12LE, { 1, 2, 0, 3 } }, { AV_PIX_FMT_GBRAP16LE, { 1, 2, 0, 3 } }, { AV_PIX_FMT_RGB24, { 0, 1, 2, -1 } }, { AV_PIX_FMT_BGR24, { 2, 1, 0, -1 } },
         { AV_PIX_FMT_ARGB, { 1, 2, 3, 0 } }, { AV_PIX_FMT_RGBA, { 0, 1, 2, 3 } }, { AV_PIX_FMT_ABGR, { 3, 2, 1, 0 } },
         { AV_PIX_FMT_BGRA, { 2, 1, 0, 3 } }, { AV_PIX_FMT_BGR0, { 2, 1, 0, 3 } }, { AV_PIX_FMT_RGB48LE, { 0, 1, 2, -1 } },
         { AV_PIX_FMT_BGR48LE, { 2, 1, 0, -1 } }, { AV_PIX_FMT_RGBA64LE, { 0, 1, 2, 3 } }, { AV_PIX_FMT_BGRA64LE, { 2, 1, 0, 3 } },
@@ -302,8 +328,10 @@ static inline int set_frame_maker(vs_video_output_handler_t* vs_vohp, int output
         { pfRGB24, 0, make_black_background_planar_rgb, make_frame_planar_rgb },
         { pfRGB27, 0, make_black_background_planar_rgb, make_frame_planar_rgb },
         { pfRGB30, 0, make_black_background_planar_rgb, make_frame_planar_rgb },
+        { pfRGB36, 0, make_black_background_planar_rgb, make_frame_planar_rgb },
         { pfRGB48, 0, make_black_background_planar_rgb, make_frame_planar_rgb }, { pfRGB24, 1, NULL, make_frame_planar_alpha8 },
-        { pfRGB30, 1, NULL, make_frame_planar_alpha16 }, { pfRGB48, 1, NULL, make_frame_planar_alpha16 }, { pfNone, 0, NULL, NULL } };
+        { pfRGB30, 1, NULL, make_frame_planar_alpha16 }, { pfRGB36, 1, NULL, make_frame_planar_alpha16 },
+        { pfRGB48, 1, NULL, make_frame_planar_alpha16 }, { pfNone, 0, NULL, NULL } };
     for (int i = 0; frame_maker_table[i].vs_output_pixel_format != pfNone; i++)
         if (vs_vohp->vs_output_pixel_format == frame_maker_table[i].vs_output_pixel_format
             && output_index == frame_maker_table[i].output_index) {
@@ -353,15 +381,15 @@ static int determine_colorspace_conversion(
         { AV_PIX_FMT_GRAY12LE, pfGray16, 1 }, { AV_PIX_FMT_GRAY12BE, pfGray16, 1 }, { AV_PIX_FMT_GRAY14LE, pfGray16, 1 },
         { AV_PIX_FMT_GRAY14BE, pfGray16, 1 }, { AV_PIX_FMT_GRAY16LE, pfGray16, 0 }, { AV_PIX_FMT_GRAY16BE, pfGray16, 1 },
         { AV_PIX_FMT_GBRP, pfRGB24, 0 }, { AV_PIX_FMT_GBRP9LE, pfRGB27, 0 }, { AV_PIX_FMT_GBRP9BE, pfRGB27, 1 },
-        { AV_PIX_FMT_GBRP10LE, pfRGB30, 0 }, { AV_PIX_FMT_GBRP10BE, pfRGB30, 1 }, { AV_PIX_FMT_GBRP12LE, pfRGB48, 1 },
-        { AV_PIX_FMT_GBRP12BE, pfRGB48, 1 }, { AV_PIX_FMT_GBRP14LE, pfRGB48, 1 }, { AV_PIX_FMT_GBRP14BE, pfRGB48, 1 },
+        { AV_PIX_FMT_GBRP10LE, pfRGB30, 0 }, { AV_PIX_FMT_GBRP10BE, pfRGB30, 1 }, { AV_PIX_FMT_GBRP12LE, pfRGB36, 0 },
+        { AV_PIX_FMT_GBRP12BE, pfRGB36, 1 }, { AV_PIX_FMT_GBRP14LE, pfRGB48, 1 }, { AV_PIX_FMT_GBRP14BE, pfRGB48, 1 },
         { AV_PIX_FMT_GBRP16LE, pfRGB48, 0 }, { AV_PIX_FMT_GBRP16BE, pfRGB48, 1 }, { AV_PIX_FMT_GBRAP, pfRGB24, 1 },
-        { AV_PIX_FMT_GBRAP10LE, pfRGB30, 1 }, { AV_PIX_FMT_GBRAP16LE, pfRGB48, 1 }, { AV_PIX_FMT_RGB24, pfRGB24, 1 },
+        { AV_PIX_FMT_GBRAP10LE, pfRGB30, 1 }, { AV_PIX_FMT_GBRAP12LE, pfRGB36, 1 }, { AV_PIX_FMT_GBRAP16LE, pfRGB48, 1 }, { AV_PIX_FMT_RGB24, pfRGB24, 1 },
         { AV_PIX_FMT_BGR24, pfRGB24, 1 }, { AV_PIX_FMT_ARGB, pfRGB24, 1 }, { AV_PIX_FMT_RGBA, pfRGB24, 1 }, { AV_PIX_FMT_ABGR, pfRGB24, 1 },
         { AV_PIX_FMT_BGRA, pfRGB24, 1 }, { AV_PIX_FMT_BGR0, pfRGB24, 1 }, { AV_PIX_FMT_RGB48LE, pfRGB48, 1 },
         { AV_PIX_FMT_RGB48BE, pfRGB48, 1 }, { AV_PIX_FMT_BGR48LE, pfRGB48, 1 }, { AV_PIX_FMT_BGR48BE, pfRGB48, 1 },
         { AV_PIX_FMT_RGBA64LE, pfRGB48, 1 }, { AV_PIX_FMT_BGRA64LE, pfRGB48, 1 }, { AV_PIX_FMT_RGBA64BE, pfRGB48, 1 },
-        { AV_PIX_FMT_XYZ12LE, pfRGB48, 1 }, { AV_PIX_FMT_NONE, pfNone, 1 } };
+        { AV_PIX_FMT_XYZ12LE, pfRGB36, 1 }, { AV_PIX_FMT_NONE, pfNone, 1 } };
     if (vs_vohp->variable_info || vs_vohp->vs_output_pixel_format == pfNone) {
         /* Determine by input pixel format. */
         for (int i = 0; conversion_table[i].vs_output_pixel_format != pfNone; i++)
@@ -380,11 +408,16 @@ static int determine_colorspace_conversion(
             }
         }
     }
+    if (vs_vohp->raw_xyz && input_pixel_format == AV_PIX_FMT_XYZ12LE)
+        fmt_conv_required = 0;
     *output_pixel_format = fmt_conv_required ? vs_to_av_output_pixel_format(vs_vohp->vs_output_pixel_format) : input_pixel_format;
     if (*output_pixel_format == AV_PIX_FMT_NONE)
         return -1;
     vs_vohp->component_reorder[output_index] = get_component_reorder(output_index ? input_pixel_format : *output_pixel_format);
-    return set_frame_maker(vs_vohp, output_index);
+    int ret = set_frame_maker(vs_vohp, output_index);
+    if (vs_vohp->raw_xyz && input_pixel_format == AV_PIX_FMT_XYZ12LE && output_index == 0)
+        vs_vohp->make_frame[0] = make_frame_planar_xyz_passthrough;
+    return ret;
 }
 
 typedef struct {
@@ -447,7 +480,7 @@ static int vs_check_dr_available(AVCodecContext* ctx, enum AVPixelFormat pixel_f
         AV_PIX_FMT_YUV422P10LE, AV_PIX_FMT_YUV444P10LE, AV_PIX_FMT_YUV420P12LE, AV_PIX_FMT_YUV422P12LE, AV_PIX_FMT_YUV444P12LE,
         AV_PIX_FMT_YUV420P14LE, AV_PIX_FMT_YUV422P14LE, AV_PIX_FMT_YUV444P14LE, AV_PIX_FMT_YUV420P16LE, AV_PIX_FMT_YUV422P16LE,
         AV_PIX_FMT_YUV444P16LE, AV_PIX_FMT_GRAY8, AV_PIX_FMT_GRAY16LE, AV_PIX_FMT_GBRP, AV_PIX_FMT_GBRP9LE, AV_PIX_FMT_GBRP10LE,
-        AV_PIX_FMT_GBRP16LE, AV_PIX_FMT_NONE };
+        AV_PIX_FMT_GBRP12LE, AV_PIX_FMT_GBRP16LE, AV_PIX_FMT_NONE };
     for (int i = 0; dr_support_pix_fmt[i] != AV_PIX_FMT_NONE; i++)
         if (dr_support_pix_fmt[i] == pixel_format)
             return 1;
@@ -597,6 +630,15 @@ vs_video_output_handler_t* vs_allocate_video_output_handler(lw_video_output_hand
     vohp->private_handler = vs_vohp;
     vohp->free_private_handler = vs_free_video_output_handler;
     return vs_vohp;
+}
+
+void vs_set_raw_xyz_output(lw_video_output_handler_t* vohp, const char* format)
+{
+    if (format && strcasecmp(format, "XYZ12LE") == 0) {
+        vs_video_output_handler_t* vs_vohp = (vs_video_output_handler_t*)vohp->private_handler;
+        vs_vohp->raw_xyz = 1;
+        vs_vohp->make_frame[0] = make_frame_planar_xyz_passthrough;
+    }
 }
 
 void vs_set_frame_properties(AVFrame* av_frame, AVStream* stream, int64_t duration_num, int64_t duration_den, VSFrame* vs_frame, int top,
